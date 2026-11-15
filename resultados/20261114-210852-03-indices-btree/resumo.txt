@@ -1,0 +1,17 @@
+Medição: 03-indices-btree
+Carga: 20 usuários virtuais por 60s
+
+Requisições:        805
+Requisições/s:      12.63
+Tempo de resposta:  mediana 390.7 ms | p95 6564.9 ms | p99 11878.3 ms
+Erros:              0.00%
+
+Por rota:
+rota                  req       mediana       p95           p99           erros   
+cliente               206       192.3 ms      484.3 ms      703.3 ms      0.0%    
+cliente-por-email     124       192.3 ms      679.8 ms      1061.2 ms     0.0%    
+pedidos-do-cliente    173       2801.0 ms     8585.1 ms     11702.6 ms    0.0%    
+pedidos-por-status    115       792.6 ms      5619.3 ms     8145.3 ms     0.0%    
+busca-produtos        123       302.1 ms      700.2 ms      973.7 ms      0.0%    
+vendas-por-dia        50        2090.1 ms     8393.0 ms     13234.5 ms    0.0%    
+top-produtos          14        11397.0 ms    24353.6 ms    24735.9 ms    0.0%    
