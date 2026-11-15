@@ -1,0 +1,33 @@
+                                                                                      QUERY PLAN                                                                                      
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ GroupAggregate  (cost=19030.62..20879.06 rows=4515 width=80) (actual time=196.218..199.689 rows=7 loops=1)
+   Group Key: (to_char(p.criado_em, 'YYYY-MM-DD'::text))
+   Buffers: shared hit=1571 read=8173
+   ->  Gather Merge  (cost=19030.62..20608.16 rows=13545 width=44) (actual time=195.887..198.784 rows=12922 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=1571 read=8173
+         ->  Sort  (cost=18030.60..18044.71 rows=5644 width=44) (actual time=191.804..191.951 rows=4307 loops=3)
+               Sort Key: (to_char(p.criado_em, 'YYYY-MM-DD'::text)), p.id
+               Sort Method: quicksort  Memory: 288kB
+               Buffers: shared hit=1571 read=8173
+               Worker 0:  Sort Method: quicksort  Memory: 389kB
+               Worker 1:  Sort Method: quicksort  Memory: 411kB
+               ->  Hash Join  (cost=219.16..17678.91 rows=5644 width=44) (actual time=2.623..188.877 rows=4307 loops=3)
+                     Hash Cond: (i.pedido_id = p.id)
+                     Buffers: shared hit=1541 read=8173
+                     ->  Parallel Seq Scan on itens_pedido i  (cost=0.00..15805.00 rows=625000 width=12) (actual time=0.334..99.795 rows=500000 loops=3)
+                           Buffers: shared hit=1383 read=8172
+                     ->  Hash  (cost=162.72..162.72 rows=4515 width=12) (actual time=0.878..0.879 rows=4310 loops=3)
+                           Buckets: 8192  Batches: 1  Memory Usage: 250kB
+                           Buffers: shared hit=64 read=1
+                           ->  Index Only Scan using idx_pedidos_criado_ativo on pedidos p  (cost=0.42..162.72 rows=4515 width=12) (actual time=0.244..0.552 rows=4310 loops=3)
+                                 Index Cond: ((criado_em >= '2024-06-01 00:00:00'::timestamp without time zone) AND (criado_em < '2024-06-08 00:00:00'::timestamp without time zone))
+                                 Heap Fetches: 0
+                                 Buffers: shared hit=64 read=1
+ Planning:
+   Buffers: shared hit=260 read=20
+ Planning Time: 7.909 ms
+ Execution Time: 200.068 ms
+(29 rows)
+
