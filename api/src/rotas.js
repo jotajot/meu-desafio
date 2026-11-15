@@ -168,17 +168,10 @@ rotas.get('/relatorios/vendas-por-dia', assincrono(async (req, res) => {
   }
 
   const linhas = await consultar(
-    `SELECT to_char(p.criado_em, 'YYYY-MM-DD') AS dia,
-            COUNT(DISTINCT p.id) AS pedidos,
-            SUM(i.quantidade) AS itens,
-            SUM(i.quantidade::bigint * i.preco_unitario_centavos) AS receita_centavos
-       FROM pedidos p
-       JOIN itens_pedido i ON i.pedido_id = p.id
-      WHERE p.criado_em >= $1::timestamp
-        AND p.criado_em < ($2::date + 1)::timestamp
-        AND p.status <> 'cancelado'
-      GROUP BY 1
-      ORDER BY 1 ASC`,
+    `SELECT dia, pedidos, itens, receita_centavos
+       FROM mv_vendas_por_dia
+      WHERE dia_data BETWEEN $1::date AND $2::date
+      ORDER BY dia_data ASC`,
     [req.query.inicio, req.query.fim],
   );
 
