@@ -1,0 +1,17 @@
+Medição: 11-cache-busca-produtos
+Carga: 20 usuários virtuais por 60s
+
+Requisições:        51449
+Requisições/s:      857.15
+Tempo de resposta:  mediana 10.0 ms | p95 73.4 ms | p99 86.1 ms
+Erros:              0.00%
+
+Por rota:
+rota                  req       mediana       p95           p99           erros   
+cliente               12950     9.1 ms        70.7 ms       80.5 ms       0.0%    
+cliente-por-email     7808      9.3 ms        71.7 ms       81.4 ms       0.0%    
+pedidos-do-cliente    10198     11.5 ms       76.3 ms       89.8 ms       0.0%    
+pedidos-por-status    7640      14.4 ms       82.0 ms       95.9 ms       0.0%    
+busca-produtos        7751      5.5 ms        62.0 ms       71.0 ms       0.0%    
+vendas-por-dia        4099      9.3 ms        71.9 ms       81.4 ms       0.0%    
+top-produtos          1003      9.3 ms        70.9 ms       82.8 ms       0.0%    
