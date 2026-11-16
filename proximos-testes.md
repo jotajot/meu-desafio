@@ -29,8 +29,8 @@ Este documento reúne alternativas pesquisadas na literatura e na documentação
 
 - **Status:** Pesquisada, teste futuro
 - **Fonte:** Redis Documentation. *Cache-aside pattern*. Disponível em: https://redis.io/docs/latest/develop/use-cases/cache-aside/
-- **Ganho esperado:** Absorver leituras repetidas de rotas com alta localidade (como `GET /relatorios/top-produtos`, `GET /relatorios/vendas-por-dia` e buscas frequentes de `GET /produtos/busca`) em tempo sub-milissegundo na memória do Redis, reduzindo drasticamente a carga de CPU do PostgreSQL.
-- **Como testaria:** Subiria um container `redis` no `docker-compose.yml`, instalaria cliente Redis na API implementando o padrão *Cache-Aside* com TTL curto (ex.: 30–60 s) e proteção contra *cache stampede*, executaria 3× `scripts/medir.sh` e confrontaria o ganho de latência/vazão com o custo extra de memória e CPU do novo container no `recursos.txt`.
+- **Ganho esperado:** No experimento `11-cache-busca-produtos` (descartado e revertido), um cache LRU local em memória na API reduziu a CPU do banco de `98.0%` para `43.7%` e elevou a vazão para `455.78 req/s`, mas saturou o limite de `0.5 vCPU` da instância única da API (`48.6%`), elevou a RAM do banco e criou estado local não compartilhável. Um cache externo distribuído com Redis permitiria compartilhar respostas de rotas com alta localidade (como `GET /produtos/busca`) entre múltiplas réplicas horizontais da API com expiração centralizada (TTL).
+- **Como testaria:** Subiria um container `redis` no `docker-compose.yml`, escalaria/ajustaria o orçamento da camada de aplicação implementando *Cache-Aside* com TTL curto (ex.: 30–60 s) e proteção contra *cache stampede*, executaria 3× `scripts/medir.sh` e confrontaria o ganho de latência/vazão com o custo extra de memória e CPU do novo container no `recursos.txt`.
 - **O que precisaria para testar:** Adição do serviço `redis` e da dependência na API (`api/package.json`), definição explícita de orçamento adicional de CPU/RAM para o cache e, em produção com escritas, definição de estratégia de invalidação/eventual consistência e testes com tráfego de escrita (`INSERT`/`UPDATE`).
 
 ---

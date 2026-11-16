@@ -4,6 +4,34 @@ Aplicação do desafio técnico da vaga de estágio em Pesquisa e Inovação da 
 
 A aplicação é a API de uma loja fictícia, em Node.js (Express) com PostgreSQL 16, rodando em containers. Ela funciona, mas fica lenta sob carga e gasta mais recursos do que deveria. Todos os dados são sintéticos e gerados na primeira subida: 100 mil clientes, 20 mil produtos, 500 mil pedidos e 1,5 milhão de itens de pedido.
 
+## Resumo do Problema e Resultados
+
+### O problema diagnosticado
+Na configuração original ([`00-linha-de-base`](resultados/20261112-095440-00-linha-de-base/resumo.txt)), sob carga de 20 usuários virtuais por 60 s (`VUS=20`, `DURACAO=60s`, `SEMENTE=42`), a aplicação processava apenas **2,60 req/s** com **p95 de 25.286,5 ms** e **97,7% de CPU no banco**. As evidências em [diagnostico/](diagnostico/) mostraram cinco causas estruturais:
+1. Conexões efêmeras (`new Client()` + `connect()`/`end()` por query em `api/src/db.js`).
+2. Ausência de índices fora das chaves primárias, gerando varreduras sequenciais e ordenações em disco (`external merge Disk`).
+3. Consultas N+1 aninhadas em `GET /clientes/:id/pedidos` (~22 queries sequenciais por requisição).
+4. Filtro não-*sargable* (`criado_em::date`) e agregação em memória no Node.js em relatórios, além de `SELECT *` trazendo a coluna larga `observacoes` e `count(*)` repetido em `GET /pedidos`.
+5. Middleware de log síncrono serializando respostas inteiras no `stdout`.
+
+### Principais resultados alcançados (mediana de 3 execuções)
+Mantendo exatamente os **mesmos limites de containers** (`banco`: 1,0 CPU / 512 MB RAM; `api`: 0,5 CPU / 256 MB RAM) e **100% do contrato HTTP preservado** (42/42 respostas idênticas):
+
+| Métrica | Linha de Base (`00`) | Estado Final (`10-otimizar-pedidos-status`) | Variação |
+| --- | --- | --- | --- |
+| **Vazão (req/s)** | `2,60 req/s` | **`292,39 req/s`** | **112,46×** (+11.145,8%) |
+| **Latência p50** | `1397,7 ms` | **`86,4 ms`** | **-93,8%** |
+| **Latência p95** | `25286,5 ms` | **`192,1 ms`** | **-99,2%** |
+| **Latência p99** | `29730,1 ms` | **`206,5 ms`** | **-99,3%** |
+| **Banco (CPU / RAM média)** | `97,7%` / `390,8 MiB` | **`98,0%`** / **`350,5 MiB`** | +0,3 p.p. / **-10,3%** |
+| **API (CPU / RAM média)** | `6,7%` / `31,2 MiB` | **`21,0%`** / **`29,7 MiB`** | +14,3 p.p. / **-4,8%** |
+
+- **Documentação completa das entregas:**
+  - Artigo técnico: [artigo/artigo.md](artigo/artigo.md)
+  - Tabela de todos os 11 experimentos (incluindo os descartados `04-indice-trigramas` e `11-cache-busca-produtos`): [experimentos.md](experimentos.md)
+  - Ideias avaliadas para testes futuros: [proximos-testes.md](proximos-testes.md)
+  - Evidências de diagnóstico (`EXPLAIN (ANALYZE, BUFFERS)`, estatísticas e logs): [diagnostico/](diagnostico/)
+
 ## Prazo e entrega
 
 - **Prazo e entregas:** estão no enunciado enviado na largada
