@@ -6,6 +6,31 @@ const rotas = express.Router();
 const STATUS_VALIDOS = ['pago', 'entregue', 'cancelado', 'pendente'];
 const TAMANHO_PAGINA = 20;
 const MAX_DIAS_RELATORIO = 31;
+const CACHE_BUSCA_MAX = Number(process.env.CACHE_BUSCA_MAX || 500);
+const CACHE_BUSCA_TTL_MS = Number(process.env.CACHE_BUSCA_TTL_MS || 60_000);
+const cacheBuscaProdutos = new Map();
+
+function lerCacheBusca(chave) {
+  const entrada = cacheBuscaProdutos.get(chave);
+  if (!entrada) return null;
+  if (Date.now() > entrada.expiraEm) {
+    cacheBuscaProdutos.delete(chave);
+    return null;
+  }
+  cacheBuscaProdutos.delete(chave);
+  cacheBuscaProdutos.set(chave, entrada);
+  return entrada.dados;
+}
+
+function gravarCacheBusca(chave, dados) {
+  if (cacheBuscaProdutos.has(chave)) {
+    cacheBuscaProdutos.delete(chave);
+  } else if (cacheBuscaProdutos.size >= CACHE_BUSCA_MAX) {
+    const maisAntiga = cacheBuscaProdutos.keys().next().value;
+    cacheBuscaProdutos.delete(maisAntiga);
+  }
+  cacheBuscaProdutos.set(chave, { dados, expiraEm: Date.now() + CACHE_BUSCA_TTL_MS });
+}
 
 function inteiroPositivo(valor) {
   if (typeof valor !== 'string' || !/^\d+$/.test(valor)) return null;
@@ -147,16 +172,22 @@ rotas.get('/produtos/busca', assincrono(async (req, res) => {
   const termo = typeof req.query.q === 'string' ? req.query.q.trim() : '';
   if (termo.length < 3) return res.status(400).json({ erro: 'o termo de busca precisa ter pelo menos 3 caracteres' });
 
+  const chave = termo.toLowerCase();
+  const emCache = lerCacheBusca(chave);
+  if (emCache !== null) return res.json(emCache);
+
   const linhas = await consultar(
-    "SELECT * FROM produtos WHERE nome ILIKE '%' || $1 || '%' ORDER BY nome, id LIMIT 20",
+    "SELECT id, nome, categoria, preco_centavos FROM produtos WHERE nome ILIKE '%' || $1 || '%' ORDER BY nome, id LIMIT 20",
     [termo],
   );
-  res.json(linhas.map((linha) => ({
+  const resultado = linhas.map((linha) => ({
     id: linha.id,
     nome: linha.nome,
     categoria: linha.categoria,
     preco_centavos: linha.preco_centavos,
-  })));
+  }));
+  gravarCacheBusca(chave, resultado);
+  res.json(resultado);
 }));
 
 rotas.get('/relatorios/vendas-por-dia', assincrono(async (req, res) => {
