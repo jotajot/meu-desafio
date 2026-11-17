@@ -1,99 +1,121 @@
-# Otimização de API Node.js e PostgreSQL: de 2,60 para 292,39 req/s sem custo extra
+# Índices e consultas certas, não mais hardware: a API da loja passou de 2,60 para 543,27 req/s com um terço a menos de CPU
 
 ## 1. Resumo
 
-Uma API de e-commerce em Node.js 20 e PostgreSQL 16 (`0,5 CPU / 256 MB` na API; `1,0 CPU / 512 MB` no banco) entregava mediana de `2,60 req/s` e `p95` de `25.286,5 ms` sob 20 usuários virtuais, saturando o banco em `97,7%` de CPU. Após diagnóstico por `EXPLAIN (ANALYZE, BUFFERS)` e 11 experimentos isolados, aplicamos *pool* de conexões, remoção de *logs* síncronos, índices B-Tree compostos/funcionais/cobridores, eliminação de N+1, agregação SQL e visões materializadas. Mantendo o mesmo hardware e 42/42 respostas idênticas, a vazão subiu para **`292,39 req/s` (112,46×)** e o `p95` caiu para **`192,1 ms` (-99,2%)**.
+Uma API de loja (Node.js e PostgreSQL em containers) atendia 2,60 requisições por segundo sob 20 usuários simultâneos, com o banco no limite de CPU. Medi, diagnostiquei e corrigi uma causa por vez: conexão nova a cada consulta, falta de índices, consultas em laço, relatórios recalculados a cada chamada e busca textual sem índice. Sem mudar nenhuma resposta, a aplicação chegou a 1.107,79 req/s com o hardware original e a 543,27 req/s com metade da CPU no banco (1,0 vCPU em vez de 1,5). Cada requisição passou a gastar menos de 0,5% da CPU que gastava.
 
 ## 2. Contexto e diagnóstico
 
-Na configuração original ([`00-linha-de-base`](../resultados/20261112-095440-00-linha-de-base/resumo.txt)), 20 usuários virtuais em fila fechada no k6 geravam apenas `189` requisições em 60 s (`2,60 req/s`, `p50 = 1397,7 ms`, `p95 = 25286,5 ms`), com o PostgreSQL em `97,7%` de CPU e `390,8 MiB` de RAM.
+Medi com o script do desafio: 20 usuários virtuais por 60 s em carga fechada (cada um só envia a próxima requisição depois de receber a anterior), três vezes por configuração, comparando a mediana. Na [linha de base](../resultados/20261112-095440-00-linha-de-base/resumo.txt), a API atendia 2,60 req/s com p95 de 25.286,5 ms; o banco usava 97,7% da sua CPU e a API, 6,7%. O gargalo era o banco. Para descobrir onde, listei os [índices](../diagnostico/01-indices-originais.txt), as [leituras por tabela](../diagnostico/02-estatisticas-tabelas-base.txt) e os [planos de execução](../diagnostico/03-explain-analyze-original.txt) de cada rota.
 
-As evidências coletadas comprovaram cinco causas raiz:
-- [01-indices-originais.txt](../diagnostico/01-indices-originais.txt): apenas chaves primárias existiam, sem índices em chaves estrangeiras, `email` ou `status`.
-- [02-estatisticas-tabelas-base.txt](../diagnostico/02-estatisticas-tabelas-base.txt): `1.273.500.000` tuplas lidas via varredura sequencial em `itens_pedido` (`idx_scan = 0`) e `218.000.000` em `pedidos`.
-- [03-explain-analyze-original.txt](../diagnostico/03-explain-analyze-original.txt): *Seq Scans* em `clientes` (`224,4 ms`), `pedidos` (`988,6 ms`), `itens_pedido` (`913,5 ms`), ordenação em disco (`external merge Disk: 32640kB` em `/pedidos`) e junções de `1099,5 ms` em `top-produtos`.
-- Código de `api/src/{db,rotas}.js` e [04-amostra-logs-api.txt](../diagnostico/04-amostra-logs-api.txt): conexão aberta/fechada por consulta (`pg.Client`), laços N+1 (~22 queries por chamada em `/clientes/:id/pedidos`), agregação em memória no Node.js com filtro não-*sargable* (`criado_em::date`) e log síncrono no `stdout`.
+Hipóteses de causa, uma por problema:
 
-**Hipótese de causa:** *forks* por conexão no PostgreSQL, varreduras sequenciais repetidas, laços N+1 e agregações em tempo real esgotam a única CPU do banco.
+- **H1, conexões:** abrir e fechar uma conexão por consulta (`api/src/db.js`) obriga o PostgreSQL a criar um processo a cada consulta.
+- **H2, índices:** só havia chaves primárias; buscas por e-mail, cliente, pedido e status liam tabelas inteiras. Só `itens_pedido` teve 1.273.500.000 linhas lidas por varredura sequencial na linha de base.
+- **H3, consultas em laço:** `/clientes/:id/pedidos` faz uma consulta por pedido e outra por item, cerca de 22 por chamada.
+- **H4, relatórios:** `top-produtos` soma 1,5 milhão de itens a cada chamada (1.100,1 ms no plano); `vendas-por-dia` traz linhas brutas para somar no Node.js.
+- **H5, paginação:** `/pedidos` conta o status inteiro e ordena em disco a cada página (`external merge` com 32.640 kB).
+- **H6, log:** cada resposta é serializada de novo e escrita no stdout ([amostra](../diagnostico/04-amostra-logs-api.txt)).
+- **H7, busca:** `ILIKE '%termo%'` lê a tabela de produtos inteira; só apareceu depois das outras correções ([pg_stat_statements](../diagnostico/06-pg-stat-statements-estado-10.txt) [20]).
 
 ## 3. Estado da arte
 
-### Gerenciamento de conexões
-O PostgreSQL usa modelo *process-per-connection*, no qual cada conexão exige *handshake* TCP, autenticação e `fork()` no sistema operacional (Leach, s.d.). A documentação do `node-postgres` recomenda manter um *pool* persistente (`pg.Pool`) na aplicação (Carlson, s.d.), enquanto guias de mercado sugerem *poolers* como o PgBouncer para múltiplas réplicas (Supabase Docs, s.d.).
+### Conexões
 
-### Indexação relacional, busca textual e otimização de consultas
-Desde Selinger et al. (1979), otimizadores baseados em custo escolhem entre *Seq Scan* e índices conforme seletividade e I/O. No PostgreSQL, chaves estrangeiras não recebem índice automático, predicados com `lower(email)` exigem índices por expressão (Winand, s.d.) e índices B-Tree compostos ou cobridores (`INCLUDE`) habilitam ordenação encadeada e *Index-Only Scans* sem acesso à *heap* (PostgreSQL, 2024a). Para `ILIKE '%termo%'`, o módulo `pg_trgm` (PostgreSQL, 2024b) e o caso do GitLab (Peterse, s.d.) usam índices GIN de trigramas, cuja eficácia depende da seletividade e do tamanho da tabela. Já consultas N+1, filtros não-*sargable*, `SELECT *` em colunas largas e agregação fora do SGBD multiplicam o custo de rede e memória (Graefe, 1993; Dombrovskaya et al., 2021).
+O PostgreSQL atende cada conexão com um processo próprio, e manter ou abrir muitas conexões custa memória e CPU [1]. A documentação do driver `node-postgres` recomenda um *pool*, que reaproveita conexões já abertas [2].
 
-### Pré-computação analítica e caminho crítico na API
-Consultas analíticas pesadas podem ser persistidas em `MATERIALIZED VIEW` indexável (PostgreSQL, 2024c), trocando recálculo contínuo por atualização periódica. No Node.js/Express, práticas de produção recomendam evitar `console.log(JSON.stringify(...))` síncronos para não bloquear o *Event Loop* (Express.js, s.d.; Node.js, s.d.), enquanto padrões de *cache-aside* reduzem leituras ao banco mediante consistência eventual (AWS, s.d.).
+### Índices e busca textual
+
+Desde Selinger et al. [3], otimizadores escolhem por estimativa de custo entre ler a tabela inteira e usar um índice. A documentação do PostgreSQL descreve índices compostos e cobridores, que respondem só com o índice (*Index-Only Scan*) [4, 5]; para comparar `lower(email)` é preciso indexar a própria expressão [6]. Índices B-Tree não atendem busca por um trecho no meio do texto. Para isso, o módulo `pg_trgm` indexa trigramas, sequências de três caracteres [7], abordagem que o GitLab usou na busca do seu produto [8].
+
+### Fazer o trabalho no lugar certo
+
+O banco tem algoritmos próprios de junção e agregação [9], e a literatura de otimização em PostgreSQL trata de reescrever consultas para aproveitá-los [10]. Quando o cálculo é caro e o dado muda pouco, dá para guardá-lo pronto: uma *materialized view* grava o resultado, que fica defasado até um `REFRESH` [11]; com `CONCURRENTLY`, o `REFRESH` não bloqueia leituras, mas exige um índice único [12]. Um cache na aplicação faz a mesma troca de atualidade por velocidade, fora do banco [13, 14]. No Node.js, `console.log` pode ser síncrono e `JSON.stringify` é caro em objetos grandes; os dois travam o *event loop* [14, 15].
+
+### Como medir
+
+A documentação do k6 descreve a carga com usuários fixos como modelo fechado, em que a vazão depende do tempo de resposta do sistema [16], e Schroeder et al. mostram que modelos fechados e abertos podem levar a conclusões diferentes [17]. Um limite de "1 CPU" no Docker é uma cota por período de 100 ms [18]; quem a esgota fica pausado até o período seguinte [19]. Na minha leitura, isso muda a interpretação: em carga fechada, a CPU do gargalo fica perto de 100% mesmo com a aplicação eficiente, então o custo precisa ser medido por requisição.
 
 ## 4. Alternativas consideradas
 
 | Alternativa | Custo | Desempenho | Risco | Esforço |
 | --- | --- | --- | --- | --- |
-| **A. Pool na API + Índices + SQL + Materialized Views** | Zero extra (`0,5 + 1,0 CPU`) | Alto (`>100×` em leitura) | Baixo (defasagem em MVs sob escrita) | Médio |
-| **B. Infraestrutura extra (PgBouncer / Redis)** | Médio (+CPU/RAM em containers) | Alto para múltiplas réplicas/cache | Médio (invalidação e operação) | Médio-alto |
-| **C. Cache LRU em memória na API** | Zero container extra (usa cota da API) | Alto em leitura; satura `0,5 CPU` da API | Médio (estado local e migração de gargalo) | Baixo |
-| **D. Escala vertical (mais CPUs/RAM)** | Alto (fatura maior) | Moderado (não corrige $O(N)$) | Baixo | Mínimo |
+| A. Corrigir consultas e índices (pool, índices, `JOIN`, agregação no SQL) | Nenhum recurso extra | Alto onde há leitura de tabela inteira | Baixo; índices encarecem escritas | Médio |
+| B. Pré-calcular relatórios e contagens (*materialized views*) | Pouco disco; `REFRESH` periódico | Alto nos relatórios | Dado defasado até o `REFRESH` | Baixo |
+| C. Cache em memória na API | CPU e RAM da API | Alto em buscas repetidas | Estado por réplica; acerto depende dos termos | Baixo |
+| D. PgBouncer ou Redis | Um container a mais cada | Útil com várias réplicas da API | Operação e invalidação | Médio-alto |
+| E. Mais CPU e memória | Mais vCPU na fatura | No máximo proporcional ao recurso | Baixo | Mínimo |
 
-A alternativa **A** resolve as causas algorítmicas ($O(N) \to O(\log N)$) sem ampliar infraestrutura. A **B** adicionaria containers cobrados no `recursos.txt` sem ganho necessário para uma réplica única. A **C** reduz carga do banco, mas satura a cota de `0,5 CPU` da API e cria estado por instância. A **D** apenas compra folga temporária mantendo varreduras ineficientes.
+A tabela registra o que eu esperava antes de medir. A e B atacam as causas H1 a H7 sem recurso extra. C resolve uma rota guardando a resposta em vez de corrigir a consulta, e cria um estado diferente em cada réplica da API. D só compensa com várias réplicas, que o desafio não tem. E aumenta a fatura e mantém as leituras de tabela inteira: dobrar a CPU dobraria, no máximo, uma vazão de 2,60 req/s. Também deixei de fora mudanças que alteram o contrato da API, como a paginação por cursor [21], que eliminaria o `OFFSET` de `/pedidos` mas muda os parâmetros da rota.
 
 ## 5. Solução escolhida e por quê
 
-Consolidamos a aplicação no estado **`10-otimizar-pedidos-status`** (conjunto **A**): `pg.Pool` (`max: 10`), remoção do *log* síncrono, 4 índices B-Tree iniciais, junção única com `LEFT JOIN`, agregação no SQL com filtro *sargable*, índice parcial cobridor em `pedidos(criado_em, id)`, `mv_top_produtos`, `mv_vendas_por_dia` e índice cobridor com `mv_contagem_pedidos_status` em `GET /pedidos`.
+Escolhi A e B, aplicadas uma de cada vez, e terminei com uma mudança de infraestrutura para baixo: reduzir a CPU do banco de 1,0 para 0,5. O argumento para a T4H é econômico. Corrigidas as causas, o hardware original atendeu 1.107,79 req/s, e a configuração recomendada atende 543,27 req/s com 1,0 vCPU em vez de 1,5.
 
-Para a realidade da T4H, essa escolha entrega **112×** mais vazão dentro do orçamento original (`1,5 vCPU` e `768 MB`), com o contrato HTTP preservado.
+Dois descartes merecem explicação. O índice de trigramas (04) piorou na primeira tentativa, mas todas as rotas pioraram junto, inclusive as que não usam produtos: sinal de ruído do ambiente, com o banco ainda ocupado por relatórios de vários segundos. Quando o `pg_stat_statements` mostrou a busca com 91,8% do tempo do banco, refiz o teste (12) e a vazão quase triplicou.
 
-Experimentos sem benefício líquido foram **descartados com evidência**: `04-indice-trigramas` reduziu a vazão (`12,39 → 8,63 req/s`) sobre `produtos` de apenas 20 mil linhas e baixa seletividade; e `11-cache-busca-produtos`, embora tenha baixado a CPU do banco para `43,7%`, saturou a API em `48,6%` de `50%` (`0,5 CPU`), elevou a RAM do banco (`350,5 → 434,6 MiB`) e trouxe consistência eventual, sendo revertida em código.
+O cache na busca (11) foi o melhor resultado até então, e mesmo assim não o mantive. A carga usa só 12 termos fixos, o que infla a taxa de acerto, e cada réplica teria o próprio cache. A defasagem não foi o motivo, já que as *materialized views* também ficam defasadas. Por isso medi o `REFRESH` delas: de 107,8 ms a 1.425,0 ms, sem carga ([refresh](../diagnostico/08-refresh-materialized-views.txt)).
 
 ## 6. Experimento e resultado
 
-Todas as medições usaram `VUS=20`, `DURACAO=60s`, `AQUECIMENTO=15s`, `SEMENTE=42` e contrato `42/42` validado, comparando a mediana de 3 execuções contra a etapa anterior (`05` compara contra `03` após descarte de `04`).
+Cada linha compara a mediana de três execuções com a da mudança anterior; o `05` compara com o `03`, porque o `04` foi revertido. Mediana calculada métrica a métrica ([medianas](../diagnostico/11-medianas.txt)). CPU/memória: banco (B) e API (A) depois da mudança, em % de 1 CPU e MiB.
 
-| Mudança | Hipótese | p95 antes → depois | req/s antes → depois | CPU/RAM (mediana) | Pastas | Conclusão |
+| Mudança | Hipótese | p95 antes → depois (ms) | req/s antes → depois | CPU/memória | Pastas de resultados | Conclusão |
 | --- | --- | --- | --- | --- | --- | --- |
-| `01-pool-conexoes` | Pool reduz `fork`/TCP | `25286,5 → 19809,0 ms` | `2,60 → 3,58` | B: 99,2%/404M; A: 6,1%/34M | [01](../resultados/20261114-150927-01-pool-conexoes/resumo.txt) | Mantida (+37,7%) |
-| `02-remover-log-resposta` | Remover log alivia API | `19809,0 → 21471,3 ms` | `3,58 → 3,22` | B: 98,0%/410M; A: 5,6%/33M | [02](../resultados/20261114-191658-02-remover-log-resposta/resumo.txt) | Sem ganho (banco saturado) |
-| `03-indices-btree` | 4 B-Trees evitam `Seq Scan` | `21471,3 → 6736,1 ms` | `3,22 → 12,39` | B: 97,8%/421M; A: 16,9%/39M | [03](../resultados/20261114-210852-03-indices-btree/resumo.txt) | Mantida (3,85×) |
-| `04-indice-trigramas` | GIN acelera `ILIKE` | `6736,1 → 9078,5 ms` | `12,39 → 8,63` | B: 95,4%/424M; A: 26,3%/40M | [04](../resultados/20261114-223530-04-indice-trigramas/resumo.txt) | Descartada (190 blocos) |
-| `05-eliminar-n-mais-1` | `LEFT JOIN` evita loop N+1 | `6736,1 → 4399,9 ms` | `12,39 → 16,79` | B: 98,5%/422M; A: 17,5%/43M | [05](../resultados/20261114-235556-05-eliminar-n-mais-1/resumo.txt) | Mantida (+35,5% vs 03) |
-| `06-agregacao-sql-vendas-por-dia` | Filtro *sargable* + `GROUP BY` | `4399,9 → 3675,7 ms` | `16,79 → 17,49` | B: 98,0%/409M; A: 3,6%/25M | [06](../resultados/20261115-103050-06-agregacao-sql-vendas-por-dia/resumo.txt) | Mantida (-79,4% CPU API) |
-| `07-indice-criado-em` | Índice parcial em `pedidos` | `3675,7 → 2999,6 ms` | `17,49 → 17,33` | B: 98,0%/420M; A: 3,4%/25M | [07](../resultados/20261115-174505-07-indice-criado-em/resumo.txt) | Mantida (-18,4% p95) |
-| `08-mv-top-produtos` | MV evita varrer 1,5M itens | `2999,6 → 1619,8 ms` | `17,33 → 37,27` | B: 98,8%/451M; A: 5,0%/27M | [08](../resultados/20261115-185228-08-mv-top-produtos/resumo.txt) | Mantida (+115,1%) |
-| `09-mv-vendas-por-dia` | MV diária evita `itens_pedido` | `1619,8 → 695,0 ms` | `37,27 → 78,56` | B: 98,3%/395M; A: 9,7%/28M | [09](../resultados/20261115-201213-09-mv-vendas-por-dia/resumo.txt) | Mantida (+110,8%) |
-| `10-otimizar-pedidos-status` | `INCLUDE` + MV de contagem | `695,0 → 192,1 ms` | `78,56 → 292,39` | B: 98,0%/351M; A: 21,0%/30M | [10](../resultados/20261115-211802-10-otimizar-pedidos-status/resumo.txt) | **Final (+272,2%)** |
-| `11-cache-busca-produtos` | Cache LRU 60 s em `produtos` | `192,1 → 86,3 ms` | `292,39 → 455,78` | B: 43,7%/435M; A: 48,6%/31M | [11](../resultados/20261115-224351-11-cache-busca-produtos/resumo.txt) | Descartada (migrou p/ API) |
+| 01 pool de conexões | Pool evita um processo por consulta | 25.286,5 → 19.809,0 | 2,60 → 3,58 | B 99,2%/404,1; A 6,1%/34,2 | [1](../resultados/20261114-150722-01-pool-conexoes/resumo.txt) [2](../resultados/20261114-150927-01-pool-conexoes/resumo.txt) [3](../resultados/20261114-151134-01-pool-conexoes/resumo.txt) | Mantida |
+| 02 remover log | Sem log, a API fica mais leve | 19.809,0 → 21.471,3 | 3,58 → 3,22 | B 98,0%/410,0; A 5,6%/32,7 | [1](../resultados/20261114-191314-02-remover-log-resposta/resumo.txt) [2](../resultados/20261114-191658-02-remover-log-resposta/resumo.txt) [3](../resultados/20261114-191853-02-remover-log-resposta/resumo.txt) | Sem ganho: banco saturado |
+| 03 índices B-Tree | Índices evitam ler tabelas inteiras | 21.471,3 → 6.736,1 | 3,22 → 12,39 | B 97,8%/421,1; A 16,9%/39,0 | [1](../resultados/20261114-210640-03-indices-btree/resumo.txt) [2](../resultados/20261114-210852-03-indices-btree/resumo.txt) [3](../resultados/20261114-211125-03-indices-btree/resumo.txt) | Mantida |
+| 04 índice de trigramas | GIN acelera o `ILIKE` | 6.736,1 → 9.078,5 | 12,39 → 8,63 | B 95,4%/424,3; A 26,3%/40,2 | [1](../resultados/20261114-223332-04-indice-trigramas/resumo.txt) [2](../resultados/20261114-223530-04-indice-trigramas/resumo.txt) [3](../resultados/20261114-223745-04-indice-trigramas/resumo.txt) | Descartada; refeita no 12 |
+| 05 fim do N+1 | Um `JOIN` no lugar de ~22 consultas | 6.736,1 → 4.399,9 | 12,39 → 16,79 | B 98,5%/421,5; A 17,5%/43,3 | [1](../resultados/20261114-235356-05-eliminar-n-mais-1/resumo.txt) [2](../resultados/20261114-235556-05-eliminar-n-mais-1/resumo.txt) [3](../resultados/20261115-000459-05-eliminar-n-mais-1/resumo.txt) | Mantida |
+| 06 agregação no SQL | Somar no banco, não no Node.js | 4.399,9 → 3.675,7 | 16,79 → 17,49 | B 98,0%/408,6; A 3,6%/25,1 | [1](../resultados/20261115-102619-06-agregacao-sql-vendas-por-dia/resumo.txt) [2](../resultados/20261115-103050-06-agregacao-sql-vendas-por-dia/resumo.txt) [3](../resultados/20261115-103257-06-agregacao-sql-vendas-por-dia/resumo.txt) | Mantida |
+| 07 índice por data | Filtro por data usa índice | 3.675,7 → 2.999,6 | 17,49 → 17,33 | B 98,0%/419,5; A 3,4%/24,8 | [1](../resultados/20261115-174211-07-indice-criado-em/resumo.txt) [2](../resultados/20261115-174505-07-indice-criado-em/resumo.txt) [3](../resultados/20261115-175205-07-indice-criado-em/resumo.txt) | Inconclusiva; mantida pelo EXPLAIN |
+| 08 view top-produtos | Ranking pré-calculado | 2.999,6 → 1.619,8 | 17,33 → 37,27 | B 98,8%/450,9; A 5,0%/27,2 | [1](../resultados/20261115-185228-08-mv-top-produtos/resumo.txt) [2](../resultados/20261115-185418-08-mv-top-produtos/resumo.txt) [3](../resultados/20261115-185546-08-mv-top-produtos/resumo.txt) | Mantida |
+| 09 view vendas-por-dia | Vendas diárias pré-calculadas | 1.619,8 → 695,0 | 37,27 → 78,56 | B 98,3%/395,4; A 9,7%/27,5 | [1](../resultados/20261115-195823-09-mv-vendas-por-dia/resumo.txt) [2](../resultados/20261115-201213-09-mv-vendas-por-dia/resumo.txt) [3](../resultados/20261115-202644-09-mv-vendas-por-dia/resumo.txt) | Mantida |
+| 10 `/pedidos` | Índice cobridor e contagem pronta | 695,0 → 192,1 | 78,56 → 292,39 | B 98,0%/350,5; A 21,0%/29,7 | [1](../resultados/20261115-211802-10-otimizar-pedidos-status/resumo.txt) [2](../resultados/20261115-212030-10-otimizar-pedidos-status/resumo.txt) [3](../resultados/20261115-213808-10-otimizar-pedidos-status/resumo.txt) | Mantida; três mudanças juntas |
+| 10b remedição | Mesmo código, outro dia | 192,1 → 106,2 | 292,39 → 379,09 | B 99,0%/412,7; A 23,2%/71,0 | [1](../resultados/20261117-124159-10b-remedicao-estado-10/resumo.txt) [2](../resultados/20261117-124418-10b-remedicao-estado-10/resumo.txt) [3](../resultados/20261117-124626-10b-remedicao-estado-10/resumo.txt) | Base de 12 e 13 |
+| 11 cache na busca | Cache evita a busca no banco | 192,1 → 86,3 | 292,39 → 455,78 | B 43,7%/434,6; A 48,6%/30,7 | [1](../resultados/20261115-223818-11-cache-busca-produtos/resumo.txt) [2](../resultados/20261115-224155-11-cache-busca-produtos/resumo.txt) [3](../resultados/20261115-224351-11-cache-busca-produtos/resumo.txt) | Descartada (seção 5) |
+| 12 trigramas sobre o 10 | GIN tira a busca do banco | 106,2 → 65,0 | 379,09 → 1.107,79 | B 80,4%/470,9; A 48,2%/30,3 | [1](../resultados/20261117-125628-12-gin-busca-sobre-10/resumo.txt) [2](../resultados/20261117-125933-12-gin-busca-sobre-10/resumo.txt) [3](../resultados/20261117-130207-12-gin-busca-sobre-10/resumo.txt) | Mantida |
+| 13 banco com 0,5 CPU | Meia CPU basta no banco | 65,0 → 93,5 | 1.107,79 → 543,27 | B 49,7%/282,6; A 25,8%/28,5 | [1](../resultados/20261117-131605-13-banco-meia-cpu/resumo.txt) [2](../resultados/20261117-131802-13-banco-meia-cpu/resumo.txt) [3](../resultados/20261117-132204-13-banco-meia-cpu/resumo.txt) | Recomendada |
 
-*(B = Banco; A = API, em MiB.)* Até `07`, mesmo após `pedidos` cair de `20.834` para `65` blocos ([05-explain-vendas-por-dia-pos-indice.txt](../diagnostico/05-explain-vendas-por-dia-pos-indice.txt)), `top-produtos` e `itens_pedido` (`9.555` blocos) saturavam o banco. Pré-computar relatórios (`08`, `09`) e remover `count(*)`/`SELECT *` (`10`) levou a vazão a `292,39 req/s` reduzindo a RAM do banco (`390,8 → 350,5 MiB`).
+![Dois painéis em escala log, da linha de base ao experimento 13: vazão em req/s subindo de 2,60 para 1.107,79 (12) e 543,27 (13, configuração recomendada), e CPU por requisição caindo de 404,23 ms para 1,16 ms (12) e 1,39 ms (13)](img/evolucao-desempenho.png)
 
-![Gráfico de evolução da vazão (req/s) e da latência p95 (ms) da linha de base ao experimento 11](img/evolucao-desempenho.png)
+A CPU do banco fica perto do limite em quase todas as linhas por causa da carga fechada [16]: cada melhoria vira mais requisições. O custo aparece na CPU por requisição, que caiu de 404,23 ms na linha de base para 1,16 ms no 12 e 1,39 ms no 13. Os contadores do cgroup mostram o banco pausado por esgotar a cota em 92,2% dos períodos de 100 ms no 10b ([throttling](../diagnostico/10-throttling-cpu-banco.txt)), o que explica rotas com mediana de 8,7 ms e p95 de 93,4 ms. Com o índice do 12, a fração caiu para 6,7%.
+
+O mesmo código mediu 292,39 req/s em 15/11 e 379,09 req/s em 17/11, por isso comparei 12 e 13 com o 10b, do mesmo dia. O 13 confirmou a hipótese só em parte: atendeu o critério que defini antes (acima do 10b, p95 abaixo de 200 ms, sem erros), mas a CPU do banco por requisição subiu de 0,72 para 0,91 ms.
 
 ## 7. Limites e testes futuros
 
-Na nossa avaliação, a solução atual possui três limites principais:
-1. **Carga apenas de leitura:** sob `INSERT`/`UPDATE` concorrentes, os índices extras causam amplificação de escrita e as visões materializadas requerem `REFRESH MATERIALIZED VIEW CONCURRENTLY`, impondo defasagem ou custo periódico de atualização.
-2. **Paginação e busca textual:** `GET /pedidos` mantém `OFFSET` linear $O(N)$ e `GET /produtos/busca` segue com `Seq Scan` (`p95 = 212,6 ms` no estágio `10`), saturando o banco em `98,0%` a `~292 req/s`.
-3. **Lacunas não testadas:** tráfego misto de escrita, acima de 20 VUs e ajuste de `shared_buffers`/`work_mem`.
+- **Só leitura:** a carga não escreve. Os índices novos encarecem cada `INSERT` e `UPDATE`, e as *views* ficam defasadas até o `REFRESH`, que medi apenas sem carga.
+- **Carga artificial:** 20 usuários sem pausa e só 12 termos de busca. Não sei quanta CPU sobraria com uma demanda real fixa.
+- **Variação:** o mesmo código variou 29,7% entre dias, e no 11 as execuções foram de 444,00 a 857,15 req/s.
+- **Mudanças agrupadas:** 03, 06 e 10 juntaram mais de uma alteração; não sei quanto cada parte contribuiu.
+- **Não verifiquei:** o tamanho do *pool* (a subida da CPU por requisição no 13 pode ser disputa de 10 conexões por meia CPU), o limite de memória, várias réplicas e o `OFFSET` de `/pedidos`, cujo custo cresce com a página [21].
 
-**Evidência que derrubaria a conclusão:** degradação severa de escrita pelos índices, bloqueio em `REFRESH` ou crescimento de `produtos` em 50× inviabilizando `Seq Scan`. As ideias adiadas (*keyset*, PgBouncer, Redis *cache-aside*, particionamento e *tuning* de memória) estão em [proximos-testes.md](../proximos-testes.md).
+O que derrubaria a conclusão: se, com escrita concorrente, o `REFRESH` bloquear leituras ou levar vários segundos, as *views* deixam de compensar; se, numa carga aberta com a demanda real, o banco com 0,5 CPU não mantiver o p95 abaixo de 200 ms, a recomendação volta a ser 1 CPU. As ideias que ficaram de fora estão em [proximos-testes.md](../proximos-testes.md).
 
 ## 8. Referências
 
-1. AWS Whitepapers. *Database Caching Strategies Using Redis — Caching Patterns*. Disponível em: https://docs.aws.amazon.com/whitepapers/latest/database-caching-strategies-using-redis/caching-patterns.html. Acesso em: 15 nov. 2026.
-2. Carlson, B. *node-postgres Documentation: Pooling*. Disponível em: https://node-postgres.com/features/pooling. Acesso em: 15 nov. 2026.
-3. Dombrovskaya, H., Novikov, B., & Bailliekova, A. (2021). *PostgreSQL Query Optimization: The Ultimate Guide to Building Efficient Queries*. Apress. Disponível em: https://doi.org/10.1007/978-1-4842-6885-8. Acesso em: 15 nov. 2026.
-4. Express.js Documentation. *Production Best Practices: Performance and Reliability*. Disponível em: https://expressjs.com/en/advanced/best-practice-performance.html. Acesso em: 15 nov. 2026.
-5. Graefe, G. (1993). *Query Evaluation Techniques for Large Databases*. ACM Computing Surveys, 25(2), 73–169. Disponível em: https://doi.org/10.1145/152610.152611. Acesso em: 15 nov. 2026.
-6. Leach, B. *Managing High Postgres Connection Counts*. Disponível em: https://brandur.org/postgres-connections. Acesso em: 15 nov. 2026.
-7. Node.js Documentation. *Don't Block the Event Loop (or the Worker Pool)*. Disponível em: https://nodejs.org/en/learn/asynchronous-work/dont-block-the-event-loop. Acesso em: 15 nov. 2026.
-8. Peterse, Y. (GitLab). *Fast Search Using PostgreSQL Trigram Indexes*. Disponível em: https://about.gitlab.com/blog/fast-search-using-postgresql-trigram/. Acesso em: 15 nov. 2026.
-9. Selinger, P. G., Astrahan, M. M., Chamberlin, D. D., Lorie, R. A., & Price, T. G. (1979). *Access Path Selection in a Relational Database Management System*. ACM SIGMOD, pp. 23–34. Disponível em: https://doi.org/10.1145/582095.582099. Acesso em: 15 nov. 2026.
-10. Supabase Docs. *Connecting to Postgres & Connection Management (Pooling)*. Disponível em: https://supabase.com/docs/guides/database/connecting-to-postgres. Acesso em: 15 nov. 2026.
-11. The PostgreSQL Global Development Group. *PostgreSQL 16 Documentation: Chapter 11 — Indexes*. Disponível em: https://www.postgresql.org/docs/16/indexes.html. Acesso em: 15 nov. 2026.
-12. The PostgreSQL Global Development Group. *PostgreSQL 16 Documentation: F.35. pg_trgm — Trigram Matching*. Disponível em: https://www.postgresql.org/docs/16/pgtrgm.html. Acesso em: 15 nov. 2026.
-13. The PostgreSQL Global Development Group. *PostgreSQL 16 Documentation: 41.3. Materialized Views*. Disponível em: https://www.postgresql.org/docs/16/rules-materializedviews.html. Acesso em: 15 nov. 2026.
-14. Winand, M. *Use The Index, Luke! — Case-Insensitive Search (LOWER) & No-Offset Pagination*. Disponível em: https://use-the-index-luke.com/sql/where-clause/functions/case-insensitive-search e https://use-the-index-luke.com/no-offset. Acesso em: 15 nov. 2026.
+1. Leach, B. *How to Manage Connections Efficiently in Postgres, or Any Database*. 2018. Disponível em: https://brandur.org/postgres-connections. Acesso em: 17 nov. 2026.
+2. Carlson, B. *node-postgres: Pooling*. Disponível em: https://node-postgres.com/features/pooling. Acesso em: 17 nov. 2026.
+3. Selinger, P. G.; Astrahan, M. M.; Chamberlin, D. D.; Lorie, R. A.; Price, T. G. *Access Path Selection in a Relational Database Management System*. Proceedings of the 1979 ACM SIGMOD, p. 23–34, 1979. Disponível em: https://doi.org/10.1145/582095.582099. Acesso em: 17 nov. 2026.
+4. The PostgreSQL Global Development Group. *PostgreSQL 16 Documentation: Chapter 11. Indexes*. Disponível em: https://www.postgresql.org/docs/16/indexes.html. Acesso em: 17 nov. 2026.
+5. The PostgreSQL Global Development Group. *PostgreSQL 16 Documentation: 11.9. Index-Only Scans and Covering Indexes*. Disponível em: https://www.postgresql.org/docs/16/indexes-index-only-scans.html. Acesso em: 17 nov. 2026.
+6. Winand, M. *Use The Index, Luke! Case-Insensitive Search Using UPPER or LOWER*. Disponível em: https://use-the-index-luke.com/sql/where-clause/functions/case-insensitive-search. Acesso em: 17 nov. 2026.
+7. The PostgreSQL Global Development Group. *PostgreSQL 16 Documentation: F.35. pg_trgm*. Disponível em: https://www.postgresql.org/docs/16/pgtrgm.html. Acesso em: 17 nov. 2026.
+8. Peterse, Y. *Fast Search Using PostgreSQL Trigram Text Indexes*. GitLab, 2016. Disponível em: https://about.gitlab.com/blog/fast-search-using-postgresql-trigram/. Acesso em: 17 nov. 2026.
+9. Graefe, G. *Query Evaluation Techniques for Large Databases*. ACM Computing Surveys, v. 25, n. 2, p. 73–169, 1993. Disponível em: https://doi.org/10.1145/152610.152611. Acesso em: 17 nov. 2026.
+10. The PostgreSQL Global Development Group. *PostgreSQL 16 Documentation: 41.3. Materialized Views*. Disponível em: https://www.postgresql.org/docs/16/rules-materializedviews.html. Acesso em: 17 nov. 2026.
+11. The PostgreSQL Global Development Group. *PostgreSQL 16 Documentation: REFRESH MATERIALIZED VIEW*. Disponível em: https://www.postgresql.org/docs/16/sql-refreshmaterializedview.html. Acesso em: 17 nov. 2026.
+12. Redis. *Redis cache-aside*. Disponível em: https://redis.io/docs/latest/develop/use-cases/cache-aside/. Acesso em: 17 nov. 2026.
+13. Express. *Production best practices: performance and reliability*. Disponível em: https://expressjs.com/en/advanced/best-practice-performance.html. Acesso em: 17 nov. 2026.
+14. Node.js. *Don't Block the Event Loop (or the Worker Pool)*. Disponível em: https://nodejs.org/en/learn/asynchronous-work/dont-block-the-event-loop. Acesso em: 17 nov. 2026.
+15. Grafana Labs. *Open and closed models*. k6 documentation. Disponível em: https://grafana.com/docs/k6/latest/using-k6/scenarios/concepts/open-vs-closed/. Acesso em: 17 nov. 2026.
+16. Schroeder, B.; Wierman, A.; Harchol-Balter, M. *Open Versus Closed: A Cautionary Tale*. 3rd USENIX Symposium on Networked Systems Design & Implementation (NSDI 06), 2006. Disponível em: https://www.usenix.org/conference/nsdi-06/open-versus-closed-cautionary-tale. Acesso em: 17 nov. 2026.
+17. Docker. *Resource constraints*. Disponível em: https://docs.docker.com/engine/containers/resource_constraints/. Acesso em: 17 nov. 2026.
+18. The Linux Kernel documentation. *CFS Bandwidth Control*. Disponível em: https://docs.kernel.org/scheduler/sched-bwc.html. Acesso em: 17 nov. 2026.
+19. The PostgreSQL Global Development Group. *PostgreSQL 16 Documentation: F.32. pg_stat_statements*. Disponível em: https://www.postgresql.org/docs/16/pgstatstatements.html. Acesso em: 17 nov. 2026.
+20. Winand, M. *Use The Index, Luke! We need tool support for keyset pagination*. Disponível em: https://use-the-index-luke.com/no-offset. Acesso em: 17 nov. 2026.
 
 ## 9. Uso de IA
 
-Agentes de IA auxiliaram na elaboração dos comandos SQL de diagnóstico, na implementação isolada das refatorações e na revisão editorial deste artigo. Todas as decisões experimentais (inclusive o descarte de `04` e `11`) foram conduzidas pelo autor, todos os links foram conferidos nas fontes originais e todos os números foram validados diretamente em `resultados/`, `diagnostico/` e `scripts/verificar-contrato.sh`.
+Usei um guia gerado no Antigravity para organizar o início e o Claude Code (Anthropic) para executar comandos, auditar o repositório e revisar e reescrever a redação deste artigo. Recalculei as medianas com `diagnostico/medianas.py` a partir de `resultados/` e abri cada referência; o guia trazia um título errado para Leach [1], que corrigi. As decisões de manter ou descartar cada mudança foram minhas.
