@@ -66,6 +66,8 @@ Todas as medições usaram `VUS=20`, `DURACAO=60s`, `AQUECIMENTO=15s`, `SEMENTE=
 
 *(B = Banco; A = API, em MiB.)* Até `07`, mesmo após `pedidos` cair de `20.834` para `65` blocos ([05-explain-vendas-por-dia-pos-indice.txt](../diagnostico/05-explain-vendas-por-dia-pos-indice.txt)), `top-produtos` e `itens_pedido` (`9.555` blocos) saturavam o banco. Pré-computar relatórios (`08`, `09`) e remover `count(*)`/`SELECT *` (`10`) levou a vazão a `292,39 req/s` reduzindo a RAM do banco (`390,8 → 350,5 MiB`).
 
+![Gráfico de evolução da vazão (req/s) e da latência p95 (ms) da linha de base ao experimento 11](img/evolucao-desempenho.png)
+
 ## 7. Limites e testes futuros
 
 Na nossa avaliação, a solução atual possui três limites principais:
