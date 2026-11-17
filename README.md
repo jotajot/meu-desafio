@@ -4,33 +4,51 @@ Aplicação do desafio técnico da vaga de estágio em Pesquisa e Inovação da 
 
 A aplicação é a API de uma loja fictícia, em Node.js (Express) com PostgreSQL 16, rodando em containers. Ela funciona, mas fica lenta sob carga e gasta mais recursos do que deveria. Todos os dados são sintéticos e gerados na primeira subida: 100 mil clientes, 20 mil produtos, 500 mil pedidos e 1,5 milhão de itens de pedido.
 
-## Resumo do Problema e Resultados
+## Resumo do problema e dos resultados
 
-### O problema diagnosticado
-Na configuração original ([`00-linha-de-base`](resultados/20261112-095440-00-linha-de-base/resumo.txt)), sob carga de 20 usuários virtuais por 60 s (`VUS=20`, `DURACAO=60s`, `SEMENTE=42`), a aplicação processava apenas **2,60 req/s** com **p95 de 25.286,5 ms** e **97,7% de CPU no banco**. As evidências em [diagnostico/](diagnostico/) mostraram cinco causas estruturais:
-1. Conexões efêmeras (`new Client()` + `connect()`/`end()` por query em `api/src/db.js`).
-2. Ausência de índices fora das chaves primárias, gerando varreduras sequenciais e ordenações em disco (`external merge Disk`).
-3. Consultas N+1 aninhadas em `GET /clientes/:id/pedidos` (~22 queries sequenciais por requisição).
-4. Filtro não-*sargable* (`criado_em::date`) e agregação em memória no Node.js em relatórios, além de `SELECT *` trazendo a coluna larga `observacoes` e `count(*)` repetido em `GET /pedidos`.
-5. Middleware de log síncrono serializando respostas inteiras no `stdout`.
+### O problema
+Na [linha de base](resultados/20261112-095440-00-linha-de-base/resumo.txt), com 20 usuários virtuais por 60 s (`VUS=20`, `DURACAO=60s`, `SEMENTE=42`), a aplicação atendia 2,60 req/s com p95 de 25.286,5 ms, e o banco usava 97,7% da sua CPU. As evidências em [diagnostico/](diagnostico/) apontaram sete causas:
 
-### Principais resultados alcançados (mediana de 3 execuções)
-Mantendo exatamente os **mesmos limites de containers** (`banco`: 1,0 CPU / 512 MB RAM; `api`: 0,5 CPU / 256 MB RAM) e **100% do contrato HTTP preservado** (42/42 respostas idênticas):
+1. Uma conexão nova ao banco a cada consulta (`api/src/db.js`).
+2. Nenhum índice além das chaves primárias: buscas por e-mail, cliente, pedido e status liam tabelas inteiras.
+3. Consultas em laço (N+1) em `GET /clientes/:id/pedidos`, cerca de 22 por chamada.
+4. Relatórios recalculados a cada chamada, com agregação no Node.js em `vendas-por-dia`.
+5. `count(*)`, `SELECT *` e ordenação em disco a cada página de `GET /pedidos`.
+6. Log síncrono que serializava a resposta inteira no `stdout`.
+7. Busca por substring (`ILIKE '%termo%'`) lendo a tabela de produtos inteira, que só apareceu como gargalo depois das outras correções.
 
-| Métrica | Linha de Base (`00`) | Estado Final (`10-otimizar-pedidos-status`) | Variação |
+### Resultados (mediana de 3 execuções, contrato com 42/42 respostas iguais)
+
+| Métrica | Linha de base (`00`) | Teto de desempenho (`12`, hardware original) | Configuração recomendada (`13`, banco com 0,5 CPU) |
 | --- | --- | --- | --- |
-| **Vazão (req/s)** | `2,60 req/s` | **`292,39 req/s`** | **112,46×** (+11.145,8%) |
-| **Latência p50** | `1397,7 ms` | **`86,4 ms`** | **-93,8%** |
-| **Latência p95** | `25286,5 ms` | **`192,1 ms`** | **-99,2%** |
-| **Latência p99** | `29730,1 ms` | **`206,5 ms`** | **-99,3%** |
-| **Banco (CPU / RAM média)** | `97,7%` / `390,8 MiB` | **`98,0%`** / **`350,5 MiB`** | +0,3 p.p. / **-10,3%** |
-| **API (CPU / RAM média)** | `6,7%` / `31,2 MiB` | **`21,0%`** / **`29,7 MiB`** | +14,3 p.p. / **-4,8%** |
+| CPU contratada (banco + API) | 1,0 + 0,5 = 1,5 vCPU | 1,0 + 0,5 = 1,5 vCPU | 0,5 + 0,5 = 1,0 vCPU |
+| Vazão | 2,60 req/s | 1.107,79 req/s | 543,27 req/s |
+| Latência p50 | 1.397,7 ms | 8,0 ms | 9,3 ms |
+| Latência p95 | 25.286,5 ms | 65,0 ms | 93,5 ms |
+| Latência p99 | 29.730,1 ms | 76,3 ms | 99,5 ms |
+| CPU banco / CPU API | 97,7% / 6,7% | 80,4% / 48,2% | 49,7% / 25,8% |
+| CPU por requisição (banco + API) | 404,23 ms | 1,16 ms | 1,39 ms |
+| Erros | 0,00% | 0,00% | 0,00% |
 
-- **Documentação completa das entregas:**
-  - Artigo técnico: [artigo/artigo.md](artigo/artigo.md)
-  - Tabela de todos os 11 experimentos (incluindo os descartados `04-indice-trigramas` e `11-cache-busca-produtos`): [experimentos.md](experimentos.md)
-  - Ideias avaliadas para testes futuros: [proximos-testes.md](proximos-testes.md)
-  - Evidências de diagnóstico (`EXPLAIN (ANALYZE, BUFFERS)`, estatísticas e logs): [diagnostico/](diagnostico/)
+Como ler a tabela:
+
+- **A CPU do banco fica perto do limite** porque a carga é fechada: cada usuário virtual envia a próxima requisição assim que recebe a anterior, então cada melhoria vira mais requisições. O custo aparece na CPU por requisição, uma métrica derivada calculada por [diagnostico/medianas.py](diagnostico/medianas.py) e salva em [diagnostico/11-medianas.txt](diagnostico/11-medianas.txt).
+- **`12` e `13` foram medidos em 17/11**, e a linha de base em 12/11. O mesmo código do estado `10` rendeu 292,39 req/s em 15/11 e 379,09 req/s em 17/11 (`10b`), então `12` e `13` foram comparados com o `10b`, medido no mesmo dia.
+- **Memória não entra na comparação:** a RAM medida inclui o cache de páginas e variou muito entre execuções do mesmo código (ver [experimentos.md](experimentos.md)).
+
+### Onde está cada coisa
+
+- Artigo: [artigo/artigo.md](artigo/artigo.md)
+- Todas as mudanças, inclusive as descartadas (`04` e `11`) e a remedição (`10b`): [experimentos.md](experimentos.md)
+- Ideias pesquisadas e não testadas: [proximos-testes.md](proximos-testes.md)
+- Evidências de diagnóstico (planos de execução, `pg_stat_statements`, tempo de `REFRESH`, throttling de CPU): [diagnostico/](diagnostico/)
+
+### Como reproduzir os números
+
+```bash
+python3 diagnostico/medianas.py > diagnostico/11-medianas.txt   # medianas e CPU por requisição a partir de resultados/
+python3 artigo/img/grafico.py                                    # gráfico do artigo (precisa de matplotlib; instruções no arquivo)
+```
 
 ## Prazo e entrega
 
