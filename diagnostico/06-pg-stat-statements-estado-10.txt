@@ -1,0 +1,19 @@
+# Estado 10 (codigo do commit c78ddb1; HEAD 2711559 so tem docs depois dele).
+# Carga k6 de diagnostico: VUS=20, 60s, semente 42, sem medir.sh e sem aquecimento (nao e medicao de resultado).
+# pg_stat_statements carregado so para este diagnostico (docker-compose.yml alterado temporariamente, sem commit).
+# total_exec_time = tempo de execucao no banco (proxy de CPU, dados em memoria).
+# O tempo inclui espera por CPU com 10 conexoes concorrentes (por isso a soma passa de 60 s); compare pela coluna pct_tempo.
+
+ calls | total_ms | media_ms | pct_tempo |                                                    consulta                                                    
+-------+----------+----------+-----------+----------------------------------------------------------------------------------------------------------------
+  3606 |   235039 |    65.18 |      91.8 | SELECT * FROM produtos WHERE nome ILIKE $2 || $1 || $3 ORDER BY nome, id LIMIT $4
+  3573 |    16570 |     4.64 |       6.5 | SELECT id, cliente_id, status, criado_em FROM pedidos WHERE status = $1 ORDER BY criado_em DESC, id DESC LIMIT
+  4924 |     3984 |     0.81 |       1.6 | SELECT p.id AS pedido_id, p.status, p.criado_em, i.produto_id, pr.nome AS produto_nome, i.quantidade, i.preco_
+  3669 |      221 |     0.06 |       0.1 | SELECT * FROM clientes WHERE lower(email) = lower($1) ORDER BY id
+  6186 |      137 |     0.02 |       0.1 | SELECT * FROM clientes WHERE id = $1
+  1960 |      130 |     0.07 |       0.1 | SELECT dia, pedidos, itens, receita_centavos FROM mv_vendas_por_dia WHERE dia_data BETWEEN $1::date AND $2::da
+  3573 |       38 |     0.01 |       0.0 | SELECT total FROM mv_contagem_pedidos_status WHERE status = $1
+   464 |       14 |     0.03 |       0.0 | SELECT id, nome, categoria, unidades, receita_centavos FROM mv_top_produtos ORDER BY receita_centavos DESC, id
+     1 |        2 |     2.23 |       0.0 | SELECT pg_stat_statements_reset()
+(9 rows)
+

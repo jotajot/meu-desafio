@@ -1,0 +1,20 @@
+Mediana calculada métrica a métrica entre as execuções de cada rótulo
+(req/s e p95 de uma mesma linha podem vir de execuções diferentes).
+cpu_ms_req_banco = CPU banco % x 10 / req/s
+cpu_ms_req_total = (CPU banco % + CPU API %) x 10 / req/s
+As duas são calculadas por execução e depois tira-se a mediana.
+ram_* = memória média do container (inclui cache de páginas; varia entre execuções).
+
+rotulo                              n    req/s    p95_ms  cpu_b%  cpu_a% ram_b_MiB ram_a_MiB cpu_ms_req_banco cpu_ms_req_total
+00-linha-de-base                    3     2.60   25286.5    97.7     6.7     390.8      31.2           375.77           404.23
+01-pool-conexoes                    3     3.58   19809.0    99.2     6.1     404.1      34.2           278.49           298.04
+02-remover-log-resposta             3     3.22   21471.3    98.0     5.6     410.0      32.7           302.18           320.56
+03-indices-btree                    3    12.39    6736.1    97.8    16.9     421.1      39.0            78.93            93.79
+04-indice-trigramas                 3     8.63    9078.5    95.4    26.3     424.3      40.2           110.54           142.06
+05-eliminar-n-mais-1                3    16.79    4399.9    98.5    17.5     421.5      43.3            58.49            69.68
+06-agregacao-sql-vendas-por-dia     3    17.49    3675.7    98.0     3.6     408.6      25.1            56.03            58.03
+07-indice-criado-em                 3    17.33    2999.6    98.0     3.4     419.5      24.8            56.55            58.51
+08-mv-top-produtos                  3    37.27    1619.8    98.8     5.0     450.9      27.2            26.51            27.82
+09-mv-vendas-por-dia                3    78.56     695.0    98.3     9.7     395.4      27.5            12.50            13.73
+10-otimizar-pedidos-status          3   292.39     192.1    98.0    21.0     350.5      29.7             3.34             4.09
+11-cache-busca-produtos             3   455.78      86.3    43.7    48.6     434.6      30.7             0.93             2.01

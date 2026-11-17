@@ -1,0 +1,69 @@
+# Estado 10, sem indice de trigramas. Banco sem carga concorrente. Segunda execucao (cache quente).
+# Termos: tipo de produto (cadeira, webcam: 5% da tabela), adjetivo (ergo: 10%) e numero de modelo (modelo 12).
+
+                                                      QUERY PLAN                                                       
+-----------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=466.88..466.93 rows=20 width=44) (actual time=7.101..7.103 rows=20 loops=1)
+   Buffers: shared hit=196
+   ->  Sort  (cost=466.88..469.40 rows=1010 width=44) (actual time=7.100..7.101 rows=20 loops=1)
+         Sort Key: nome, id
+         Sort Method: top-N heapsort  Memory: 27kB
+         Buffers: shared hit=196
+         ->  Seq Scan on produtos  (cost=0.00..440.00 rows=1010 width=44) (actual time=0.013..6.833 rows=1000 loops=1)
+               Filter: (nome ~~* '%cadeira%'::text)
+               Rows Removed by Filter: 19000
+               Buffers: shared hit=190
+ Planning:
+   Buffers: shared hit=83
+ Planning Time: 0.352 ms
+ Execution Time: 7.121 ms
+(14 rows)
+
+                                                      QUERY PLAN                                                       
+-----------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=547.50..547.55 rows=20 width=44) (actual time=6.873..6.876 rows=20 loops=1)
+   Buffers: shared hit=190
+   ->  Sort  (cost=547.50..557.60 rows=4040 width=44) (actual time=6.872..6.874 rows=20 loops=1)
+         Sort Key: nome, id
+         Sort Method: top-N heapsort  Memory: 28kB
+         Buffers: shared hit=190
+         ->  Seq Scan on produtos  (cost=0.00..440.00 rows=4040 width=44) (actual time=0.008..6.616 rows=2000 loops=1)
+               Filter: (nome ~~* '%ergo%'::text)
+               Rows Removed by Filter: 18000
+               Buffers: shared hit=190
+ Planning Time: 0.139 ms
+ Execution Time: 6.886 ms
+(12 rows)
+
+                                                     QUERY PLAN                                                     
+--------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=440.01..440.01 rows=2 width=44) (actual time=7.241..7.244 rows=20 loops=1)
+   Buffers: shared hit=190
+   ->  Sort  (cost=440.01..440.01 rows=2 width=44) (actual time=7.240..7.241 rows=20 loops=1)
+         Sort Key: nome, id
+         Sort Method: top-N heapsort  Memory: 27kB
+         Buffers: shared hit=190
+         ->  Seq Scan on produtos  (cost=0.00..440.00 rows=2 width=44) (actual time=0.016..7.099 rows=1111 loops=1)
+               Filter: (nome ~~* '%modelo 12%'::text)
+               Rows Removed by Filter: 18889
+               Buffers: shared hit=190
+ Planning Time: 0.144 ms
+ Execution Time: 7.256 ms
+(12 rows)
+
+                                                      QUERY PLAN                                                      
+----------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=461.50..461.55 rows=20 width=44) (actual time=6.719..6.721 rows=20 loops=1)
+   Buffers: shared hit=190
+   ->  Sort  (cost=461.50..463.52 rows=808 width=44) (actual time=6.718..6.719 rows=20 loops=1)
+         Sort Key: nome, id
+         Sort Method: top-N heapsort  Memory: 27kB
+         Buffers: shared hit=190
+         ->  Seq Scan on produtos  (cost=0.00..440.00 rows=808 width=44) (actual time=0.010..6.472 rows=1000 loops=1)
+               Filter: (nome ~~* '%webcam%'::text)
+               Rows Removed by Filter: 19000
+               Buffers: shared hit=190
+ Planning Time: 0.103 ms
+ Execution Time: 6.731 ms
+(12 rows)
+

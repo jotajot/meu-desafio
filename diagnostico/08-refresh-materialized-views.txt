@@ -1,0 +1,18 @@
+# Estado 10, banco sem carga concorrente. Tempo de REFRESH de cada materialized view.
+# CONCURRENTLY nao bloqueia leituras (exige indice UNIQUE); sem CONCURRENTLY bloqueia leituras durante o refresh.
+
+Timing is on.
+REFRESH MATERIALIZED VIEW
+Time: 1245.246 ms (00:01.245)
+REFRESH MATERIALIZED VIEW
+Time: 1425.011 ms (00:01.425)
+REFRESH MATERIALIZED VIEW
+Time: 107.810 ms
+REFRESH MATERIALIZED VIEW
+Time: 1008.279 ms (00:01.008)
+REFRESH MATERIALIZED VIEW
+Time: 1293.361 ms (00:01.293)
+REFRESH MATERIALIZED VIEW
+Time: 163.251 ms
+VACUUM
+Time: 218.291 ms
