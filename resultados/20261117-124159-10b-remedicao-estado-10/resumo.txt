@@ -1,0 +1,17 @@
+Medição: 10b-remedicao-estado-10
+Carga: 20 usuários virtuais por 60s
+
+Requisições:        22651
+Requisições/s:      376.93
+Tempo de resposta:  mediana 19.3 ms | p95 106.4 ms | p99 194.3 ms
+Erros:              0.00%
+
+Por rota:
+rota                  req       mediana       p95           p99           erros   
+cliente               5726      8.7 ms        93.4 ms       97.6 ms       0.0%    
+cliente-por-email     3392      8.9 ms        93.7 ms       97.5 ms       0.0%    
+pedidos-do-cliente    4602      12.7 ms       97.4 ms       103.6 ms      0.0%    
+pedidos-por-status    3328      86.8 ms       103.4 ms      186.6 ms      0.0%    
+busca-produtos        3354      101.2 ms      195.8 ms      203.4 ms      0.0%    
+vendas-por-dia        1825      8.8 ms        93.3 ms       97.6 ms       0.0%    
+top-produtos          424       8.8 ms        93.4 ms       97.7 ms       0.0%    
