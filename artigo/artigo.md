@@ -16,7 +16,7 @@ Hipóteses de causa, uma por problema:
 - **H4, relatórios:** `top-produtos` soma 1,5 milhão de itens a cada chamada (1.100,1 ms no plano); `vendas-por-dia` traz linhas brutas para somar no Node.js.
 - **H5, paginação:** `/pedidos` conta o status inteiro e ordena em disco a cada página (`external merge` com 32.640 kB).
 - **H6, log:** cada resposta é serializada de novo e escrita no stdout ([amostra](../diagnostico/04-amostra-logs-api.txt)).
-- **H7, busca:** `ILIKE '%termo%'` lê a tabela de produtos inteira; só apareceu depois das outras correções ([pg_stat_statements](../diagnostico/06-pg-stat-statements-estado-10.txt) [20]).
+- **H7, busca:** `ILIKE '%termo%'` lê a tabela de produtos inteira; só apareceu depois das outras correções ([pg_stat_statements](../diagnostico/06-pg-stat-statements-estado-10.txt) [19]).
 
 ## 3. Estado da arte
 
@@ -30,11 +30,11 @@ Desde Selinger et al. [3], otimizadores escolhem por estimativa de custo entre l
 
 ### Fazer o trabalho no lugar certo
 
-O banco tem algoritmos próprios de junção e agregação [9], e a literatura de otimização em PostgreSQL trata de reescrever consultas para aproveitá-los [10]. Quando o cálculo é caro e o dado muda pouco, dá para guardá-lo pronto: uma *materialized view* grava o resultado, que fica defasado até um `REFRESH` [11]; com `CONCURRENTLY`, o `REFRESH` não bloqueia leituras, mas exige um índice único [12]. Um cache na aplicação faz a mesma troca de atualidade por velocidade, fora do banco [13, 14]. No Node.js, `console.log` pode ser síncrono e `JSON.stringify` é caro em objetos grandes; os dois travam o *event loop* [14, 15].
+O banco tem algoritmos próprios de junção e agregação [9]; por isso, reescrever a consulta para que ele faça esse trabalho costuma render mais do que fazê-lo na aplicação. Quando o cálculo é caro e o dado muda pouco, dá para guardá-lo pronto: uma *materialized view* grava o resultado, que fica defasado até um `REFRESH` [10]; com `CONCURRENTLY`, o `REFRESH` não bloqueia leituras, mas exige um índice único [11]. Um cache na aplicação faz a mesma troca de atualidade por velocidade, fora do banco [12, 13]. No Node.js, `console.log` pode ser síncrono e `JSON.stringify` é caro em objetos grandes; os dois travam o *event loop* [13, 14].
 
 ### Como medir
 
-A documentação do k6 descreve a carga com usuários fixos como modelo fechado, em que a vazão depende do tempo de resposta do sistema [16], e Schroeder et al. mostram que modelos fechados e abertos podem levar a conclusões diferentes [17]. Um limite de "1 CPU" no Docker é uma cota por período de 100 ms [18]; quem a esgota fica pausado até o período seguinte [19]. Na minha leitura, isso muda a interpretação: em carga fechada, a CPU do gargalo fica perto de 100% mesmo com a aplicação eficiente, então o custo precisa ser medido por requisição.
+A documentação do k6 descreve a carga com usuários fixos como modelo fechado, em que a vazão depende do tempo de resposta do sistema [15], e Schroeder et al. mostram que modelos fechados e abertos podem levar a conclusões diferentes [16]. Um limite de "1 CPU" no Docker é uma cota por período de 100 ms [17]; quem a esgota fica pausado até o período seguinte [18]. Na minha leitura, isso muda a interpretação: em carga fechada, a CPU do gargalo fica perto de 100% mesmo com a aplicação eficiente, então o custo precisa ser medido por requisição.
 
 ## 4. Alternativas consideradas
 
@@ -46,7 +46,7 @@ A documentação do k6 descreve a carga com usuários fixos como modelo fechado,
 | D. PgBouncer ou Redis | Um container a mais cada | Útil com várias réplicas da API | Operação e invalidação | Médio-alto |
 | E. Mais CPU e memória | Mais vCPU na fatura | No máximo proporcional ao recurso | Baixo | Mínimo |
 
-A tabela registra o que eu esperava antes de medir. A e B atacam as causas H1 a H7 sem recurso extra. C resolve uma rota guardando a resposta em vez de corrigir a consulta, e cria um estado diferente em cada réplica da API. D só compensa com várias réplicas, que o desafio não tem. E aumenta a fatura e mantém as leituras de tabela inteira: dobrar a CPU dobraria, no máximo, uma vazão de 2,60 req/s. Também deixei de fora mudanças que alteram o contrato da API, como a paginação por cursor [21], que eliminaria o `OFFSET` de `/pedidos` mas muda os parâmetros da rota.
+A tabela registra o que eu esperava antes de medir. A e B atacam as causas H1 a H7 sem recurso extra. C resolve uma rota guardando a resposta em vez de corrigir a consulta, e cria um estado diferente em cada réplica da API. D só compensa com várias réplicas, que o desafio não tem. E aumenta a fatura e mantém as leituras de tabela inteira: dobrar a CPU dobraria, no máximo, uma vazão de 2,60 req/s. Também deixei de fora mudanças que alteram o contrato da API, como a paginação por cursor [20], que eliminaria o `OFFSET` de `/pedidos` mas muda os parâmetros da rota.
 
 ## 5. Solução escolhida e por quê
 
@@ -79,7 +79,7 @@ Cada linha compara a mediana de três execuções com a da mudança anterior; o 
 
 ![Dois painéis em escala log, da linha de base ao experimento 13: vazão em req/s subindo de 2,60 para 1.107,79 (12) e 543,27 (13, configuração recomendada), e CPU por requisição caindo de 404,23 ms para 1,16 ms (12) e 1,39 ms (13)](img/evolucao-desempenho.png)
 
-A CPU do banco fica perto do limite em quase todas as linhas por causa da carga fechada [16]: cada melhoria vira mais requisições. O custo aparece na CPU por requisição, que caiu de 404,23 ms na linha de base para 1,16 ms no 12 e 1,39 ms no 13. Os contadores do cgroup mostram o banco pausado por esgotar a cota em 92,2% dos períodos de 100 ms no 10b ([throttling](../diagnostico/10-throttling-cpu-banco.txt)), o que explica rotas com mediana de 8,7 ms e p95 de 93,4 ms. Com o índice do 12, a fração caiu para 6,7%.
+A CPU do banco fica perto do limite em quase todas as linhas por causa da carga fechada [15]: cada melhoria vira mais requisições. O custo aparece na CPU por requisição, que caiu de 404,23 ms na linha de base para 1,16 ms no 12 e 1,39 ms no 13. Os contadores do cgroup mostram o banco pausado por esgotar a cota em 92,2% dos períodos de 100 ms no 10b ([throttling](../diagnostico/10-throttling-cpu-banco.txt)), o que explica rotas com mediana de 8,7 ms e p95 de 93,4 ms. Com o índice do 12, a fração caiu para 6,7%.
 
 O mesmo código mediu 292,39 req/s em 15/11 e 379,09 req/s em 17/11, por isso comparei 12 e 13 com o 10b, do mesmo dia. O 13 confirmou a hipótese só em parte: atendeu o critério que defini antes (acima do 10b, p95 abaixo de 200 ms, sem erros), mas a CPU do banco por requisição subiu de 0,72 para 0,91 ms.
 
@@ -89,7 +89,7 @@ O mesmo código mediu 292,39 req/s em 15/11 e 379,09 req/s em 17/11, por isso co
 - **Carga artificial:** 20 usuários sem pausa e só 12 termos de busca. Não sei quanta CPU sobraria com uma demanda real fixa.
 - **Variação:** o mesmo código variou 29,7% entre dias, e no 11 as execuções foram de 444,00 a 857,15 req/s.
 - **Mudanças agrupadas:** 03, 06 e 10 juntaram mais de uma alteração; não sei quanto cada parte contribuiu.
-- **Não verifiquei:** o tamanho do *pool* (a subida da CPU por requisição no 13 pode ser disputa de 10 conexões por meia CPU), o limite de memória, várias réplicas e o `OFFSET` de `/pedidos`, cujo custo cresce com a página [21].
+- **Não verifiquei:** o tamanho do *pool* (a subida da CPU por requisição no 13 pode ser disputa de 10 conexões por meia CPU), o limite de memória, várias réplicas e o `OFFSET` de `/pedidos`, cujo custo cresce com a página [20].
 
 O que derrubaria a conclusão: se, com escrita concorrente, o `REFRESH` bloquear leituras ou levar vários segundos, as *views* deixam de compensar; se, numa carga aberta com a demanda real, o banco com 0,5 CPU não mantiver o p95 abaixo de 200 ms, a recomendação volta a ser 1 CPU. As ideias que ficaram de fora estão em [proximos-testes.md](../proximos-testes.md).
 
