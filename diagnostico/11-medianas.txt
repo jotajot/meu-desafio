@@ -20,3 +20,4 @@ rotulo                              n    req/s    p95_ms  cpu_b%  cpu_a% ram_b_M
 10b-remedicao-estado-10             3   379.09     106.2    99.0    23.2     412.7      71.0             2.60             3.21
 11-cache-busca-produtos             3   455.78      86.3    43.7    48.6     434.6      30.7             0.93             2.01
 12-gin-busca-sobre-10               3  1107.79      65.0    80.4    48.2     470.9      30.3             0.72             1.16
+13-banco-meia-cpu                   3   543.27      93.5    49.7    25.8     282.6      28.5             0.91             1.39
