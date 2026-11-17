@@ -1,0 +1,86 @@
+# Experimento 12: estado 10 + indice GIN pg_trgm. Banco sem carga. Segunda execucao (cache quente).
+
+                                                                    QUERY PLAN                                                                    
+--------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=282.34..282.39 rows=20 width=44) (actual time=1.064..1.067 rows=20 loops=1)
+   Buffers: shared hit=208
+   ->  Sort  (cost=282.34..284.87 rows=1010 width=44) (actual time=1.063..1.064 rows=20 loops=1)
+         Sort Key: nome, id
+         Sort Method: top-N heapsort  Memory: 27kB
+         Buffers: shared hit=208
+         ->  Bitmap Heap Scan on produtos  (cost=52.84..255.47 rows=1010 width=44) (actual time=0.211..0.817 rows=1000 loops=1)
+               Recheck Cond: (nome ~~* '%cadeira%'::text)
+               Heap Blocks: exact=190
+               Buffers: shared hit=202
+               ->  Bitmap Index Scan on idx_produtos_nome_trgm  (cost=0.00..52.59 rows=1010 width=0) (actual time=0.170..0.170 rows=1000 loops=1)
+                     Index Cond: (nome ~~* '%cadeira%'::text)
+                     Buffers: shared hit=12
+ Planning:
+   Buffers: shared hit=114
+ Planning Time: 0.573 ms
+ Execution Time: 1.169 ms
+(17 rows)
+
+                                                                    QUERY PLAN                                                                    
+--------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=394.83..394.88 rows=20 width=44) (actual time=1.235..1.237 rows=20 loops=1)
+   Buffers: shared hit=126
+   ->  Sort  (cost=394.83..404.93 rows=4040 width=44) (actual time=1.235..1.236 rows=20 loops=1)
+         Sort Key: nome, id
+         Sort Method: top-N heapsort  Memory: 28kB
+         Buffers: shared hit=126
+         ->  Bitmap Heap Scan on produtos  (cost=46.83..287.33 rows=4040 width=44) (actual time=0.109..0.967 rows=2000 loops=1)
+               Recheck Cond: (nome ~~* '%ergo%'::text)
+               Heap Blocks: exact=121
+               Buffers: shared hit=126
+               ->  Bitmap Index Scan on idx_produtos_nome_trgm  (cost=0.00..45.82 rows=4040 width=0) (actual time=0.096..0.096 rows=2000 loops=1)
+                     Index Cond: (nome ~~* '%ergo%'::text)
+                     Buffers: shared hit=5
+ Planning:
+   Buffers: shared hit=1
+ Planning Time: 0.069 ms
+ Execution Time: 1.255 ms
+(17 rows)
+
+                                                                  QUERY PLAN                                                                   
+-----------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=72.33..72.34 rows=2 width=44) (actual time=0.976..0.978 rows=20 loops=1)
+   Buffers: shared hit=51
+   ->  Sort  (cost=72.33..72.34 rows=2 width=44) (actual time=0.976..0.977 rows=20 loops=1)
+         Sort Key: nome, id
+         Sort Method: top-N heapsort  Memory: 27kB
+         Buffers: shared hit=51
+         ->  Bitmap Heap Scan on produtos  (cost=64.91..72.32 rows=2 width=44) (actual time=0.424..0.841 rows=1111 loops=1)
+               Recheck Cond: (nome ~~* '%modelo 12%'::text)
+               Heap Blocks: exact=14
+               Buffers: shared hit=51
+               ->  Bitmap Index Scan on idx_produtos_nome_trgm  (cost=0.00..64.91 rows=2 width=0) (actual time=0.420..0.420 rows=1111 loops=1)
+                     Index Cond: (nome ~~* '%modelo 12%'::text)
+                     Buffers: shared hit=37
+ Planning:
+   Buffers: shared hit=1
+ Planning Time: 0.071 ms
+ Execution Time: 0.994 ms
+(17 rows)
+
+                                                                   QUERY PLAN                                                                    
+-------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=264.70..264.75 rows=20 width=44) (actual time=0.823..0.825 rows=20 loops=1)
+   Buffers: shared hit=199
+   ->  Sort  (cost=264.70..266.72 rows=808 width=44) (actual time=0.823..0.824 rows=20 loops=1)
+         Sort Key: nome, id
+         Sort Method: top-N heapsort  Memory: 27kB
+         Buffers: shared hit=199
+         ->  Bitmap Heap Scan on produtos  (cost=43.10..243.20 rows=808 width=44) (actual time=0.093..0.588 rows=1000 loops=1)
+               Recheck Cond: (nome ~~* '%webcam%'::text)
+               Heap Blocks: exact=190
+               Buffers: shared hit=199
+               ->  Bitmap Index Scan on idx_produtos_nome_trgm  (cost=0.00..42.90 rows=808 width=0) (actual time=0.075..0.075 rows=1000 loops=1)
+                     Index Cond: (nome ~~* '%webcam%'::text)
+                     Buffers: shared hit=9
+ Planning:
+   Buffers: shared hit=1
+ Planning Time: 0.071 ms
+ Execution Time: 0.832 ms
+(17 rows)
+

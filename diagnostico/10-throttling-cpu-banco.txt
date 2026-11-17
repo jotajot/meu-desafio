@@ -1,0 +1,14 @@
+# cpu.stat do cgroup do banco (cgroup v2, /sys/fs/cgroup/cpu.stat) antes e depois da 1a execucao de cada rotulo.
+# A janela inclui o aquecimento (15 s), a carga (60 s) e a verificacao de contrato do medir.sh.
+# nr_periods = periodos de 100 ms; nr_throttled = periodos em que o banco esgotou a cota de CPU e foi pausado.
+# throttled_usec soma a pausa de todos os nucleos da maquina; nao e tempo de relogio e nao deve ser comparado com a duracao do teste.
+
+## 10b-remedicao-estado-10 (limite 1 CPU)
+antes:  usage_usec=24370370  user_usec=17587324  system_usec=6783046  nice_usec=0  nr_periods=1538  nr_throttled=48  throttled_usec=8213230  nr_bursts=0  burst_usec=0
+depois: usage_usec=176122495  user_usec=160772460  system_usec=15350034  nice_usec=0  nr_periods=3168  nr_throttled=1551  throttled_usec=877450599  nr_bursts=0  burst_usec=0
+periodos=1630  periodos_com_pausa=1503  fracao_com_pausa=92.2%  cpu_usada=151.8 s em ~163 s (~0.93 CPU)
+
+## 12-gin-busca-sobre-10 (limite 1 CPU)
+antes:  usage_usec=23826396  user_usec=20775234  system_usec=3051161  nice_usec=0  nr_periods=459  nr_throttled=88  throttled_usec=5300651  nr_bursts=0  burst_usec=0
+depois: usage_usec=144325299  user_usec=124368948  system_usec=19956351  nice_usec=0  nr_periods=2143  nr_throttled=201  throttled_usec=10727679  nr_bursts=0  burst_usec=0
+periodos=1684  periodos_com_pausa=113  fracao_com_pausa=6.7%  cpu_usada=120.5 s em ~168 s (~0.72 CPU)

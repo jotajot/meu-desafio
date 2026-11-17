@@ -1,0 +1,17 @@
+Medição: 12-gin-busca-sobre-10
+Carga: 20 usuários virtuais por 60s
+
+Requisições:        66494
+Requisições/s:      1107.79
+Tempo de resposta:  mediana 8.0 ms | p95 65.5 ms | p99 76.3 ms
+Erros:              0.00%
+
+Por rota:
+rota                  req       mediana       p95           p99           erros   
+cliente               16693     6.7 ms        62.7 ms       72.0 ms       0.0%    
+cliente-por-email     10130     6.8 ms        63.2 ms       74.5 ms       0.0%    
+pedidos-do-cliente    13242     8.1 ms        65.2 ms       76.8 ms       0.0%    
+pedidos-por-status    9846      11.3 ms       69.5 ms       80.8 ms       0.0%    
+busca-produtos        9991      9.3 ms        66.8 ms       78.3 ms       0.0%    
+vendas-por-dia        5287      6.8 ms        63.1 ms       74.2 ms       0.0%    
+top-produtos          1305      6.8 ms        63.8 ms       72.3 ms       0.0%    
