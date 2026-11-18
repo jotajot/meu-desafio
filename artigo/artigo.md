@@ -118,4 +118,4 @@ O que derrubaria a conclusão: se, com escrita concorrente, o `REFRESH` bloquear
 
 ## 9. Uso de IA
 
-Usei o Antigravity IDE desde o começo para montar, a partir do PDF e do repositório, um guia passo a passo, executar comandos e me explicar cada alteração, e o Claude Code (Anthropic) para auditar o repositório e revisar e corrigir o artigo. Verifiquei recalculando as medianas a partir de `resultados/` e abrindo cada referência, o que corrigiu o título de Leach [1]. As decisões foram minhas.
+Usei o Antigravity IDE desde o começo para montar, a partir do PDF e do repositório, um guia passo a passo, executar comandos e me explicar cada alteração, e o Claude Code (Anthropic) para auditar o repositório, revisar e corrigir o artigo. Verifiquei recalculando as medianas a partir de `resultados/` e abrindo cada referência, o que corrigiu o título de Leach [1]. As decisões foram minhas.
