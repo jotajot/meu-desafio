@@ -2,7 +2,7 @@
 
 ## 1. Resumo
 
-Uma API de loja (Node.js e PostgreSQL em containers) atendia 2,60 requisições por segundo sob 20 usuários simultâneos, com o banco no limite de CPU. Medi, diagnostiquei e corrigi uma causa por vez: conexão nova a cada consulta, falta de índices, consultas em laço, relatórios recalculados a cada chamada e busca textual sem índice. Sem mudar nenhuma resposta, a aplicação chegou a 1.107,79 req/s com o hardware original e a 543,27 req/s com metade da CPU no banco (1,0 vCPU em vez de 1,5). Cada requisição passou a gastar menos de 0,5% da CPU que gastava.
+Uma API de loja (Node.js e PostgreSQL em containers) atendia 2,60 requisições por segundo sob 20 usuários simultâneos, com o banco no limite de CPU. Medi, diagnostiquei e corrigi uma causa por vez: conexão nova a cada consulta, falta de índices, consultas em laço, relatórios recalculados a cada chamada e busca textual sem índice. Sem mudar nenhuma resposta, a aplicação chegou a 1.107,79 req/s com o hardware original e a 543,27 req/s com metade da CPU no banco (0,5 vCPU em vez de 1,0), o que reduz o total da aplicação, banco mais API, de 1,5 para 1,0 vCPU, um terço a menos. Cada requisição passou a gastar menos de 0,5% da CPU que gastava.
 
 ## 2. Contexto e diagnóstico
 
@@ -50,7 +50,7 @@ A tabela registra o que eu esperava antes de medir. A e B atacam as causas H1 a 
 
 ## 5. Solução escolhida e por quê
 
-Escolhi A e B, aplicadas uma de cada vez, e terminei com uma mudança de infraestrutura para baixo: reduzir a CPU do banco de 1,0 para 0,5. O argumento para a T4H é econômico. Corrigidas as causas, o hardware original atendeu 1.107,79 req/s, e a configuração recomendada atende 543,27 req/s com 1,0 vCPU em vez de 1,5.
+Escolhi A e B, aplicadas uma de cada vez, e terminei com uma mudança de infraestrutura para baixo: reduzir a CPU do banco de 1,0 para 0,5. O argumento para a T4H é econômico. Corrigidas as causas, o hardware original atendeu 1.107,79 req/s, e a configuração recomendada atende 543,27 req/s com 1,0 vCPU no total (banco mais API) em vez de 1,5: metade a menos no banco e um terço a menos na aplicação inteira.
 
 Dois descartes merecem explicação. O índice de trigramas (04) piorou na primeira tentativa, mas todas as rotas pioraram junto, inclusive as que não usam produtos: sinal de ruído do ambiente, com o banco ainda ocupado por relatórios de vários segundos. Quando o `pg_stat_statements` mostrou a busca com 91,8% do tempo do banco, refiz o teste (12) e a vazão quase triplicou.
 
