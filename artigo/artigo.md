@@ -2,7 +2,7 @@
 
 ## 1. Resumo
 
-Uma API de loja (Node.js e PostgreSQL em containers) atendia 2,60 requisições por segundo sob 20 usuários simultâneos, com o banco no limite de CPU. Medi, diagnostiquei e corrigi uma causa por vez: conexão nova a cada consulta, falta de índices, consultas em laço, relatórios recalculados a cada chamada e busca textual sem índice. Sem mudar nenhuma resposta, a aplicação chegou a 1.107,79 req/s com o hardware original e a 543,27 req/s com metade da CPU no banco (0,5 vCPU em vez de 1,0), o que reduz o total da aplicação, banco mais API, de 1,5 para 1,0 vCPU, um terço a menos. Cada requisição passou a gastar menos de 0,5% da CPU que gastava.
+Uma API de loja em Node.js e PostgreSQL atendia 2,60 req/s, com o banco no limite de CPU. Corrigi uma causa por vez: conexão por consulta, falta de índices, consultas em laço, relatórios recalculados e busca sem índice. Sem mudar respostas, a API chegou a 1.107,79 req/s com o hardware original e a 543,27 req/s com o banco em 0,5 vCPU, um terço a menos no total. Cada requisição gasta menos de 0,5% da CPU original.
 
 ## 2. Contexto e diagnóstico
 
@@ -50,15 +50,15 @@ A tabela registra o que eu esperava antes de medir. A e B atacam as causas H1 a 
 
 ## 5. Solução escolhida e por quê
 
-Escolhi A e B, aplicadas uma de cada vez, e terminei com uma mudança de infraestrutura para baixo: reduzir a CPU do banco de 1,0 para 0,5. O argumento para a T4H é econômico. Corrigidas as causas, o hardware original atendeu 1.107,79 req/s, e a configuração recomendada atende 543,27 req/s com 1,0 vCPU no total (banco mais API) em vez de 1,5: metade a menos no banco e um terço a menos na aplicação inteira.
+Escolhi A e B, aplicadas uma de cada vez, e terminei com uma mudança de infraestrutura para baixo: reduzir a CPU do banco de 1,0 para 0,5. O argumento para a T4H é econômico. Corrigidas as causas, o hardware original atendeu 1.107,79 req/s, e a configuração recomendada atende 543,27 req/s com 1,0 vCPU no total (banco mais API) em vez de 1,5: metade a menos no banco, um terço a menos no total.
 
 Dois descartes merecem explicação. O índice de trigramas (04) piorou na primeira tentativa, mas todas as rotas pioraram junto, inclusive as que não usam produtos: sinal de ruído do ambiente, com o banco ainda ocupado por relatórios de vários segundos. Quando o `pg_stat_statements` mostrou a busca com 91,8% do tempo do banco, refiz o teste (12) e a vazão quase triplicou.
 
-O cache na busca (11) foi o melhor resultado até então, e mesmo assim não o mantive. A carga usa só 12 termos fixos, o que infla a taxa de acerto, e cada réplica teria o próprio cache. A defasagem não foi o motivo, já que as *materialized views* também ficam defasadas. Por isso medi o `REFRESH` delas: de 107,8 ms a 1.425,0 ms, sem carga ([refresh](../diagnostico/08-refresh-materialized-views.txt)).
+O cache na busca (11) foi o melhor resultado até então, mas não o mantive. A carga usa só 12 termos fixos, o que infla a taxa de acerto, e cada réplica teria o próprio cache. A defasagem não foi o motivo, já que as *materialized views* também ficam defasadas. Por isso medi o `REFRESH` delas: de 107,8 ms a 1.425,0 ms, sem carga ([refresh](../diagnostico/08-refresh-materialized-views.txt)).
 
 ## 6. Experimento e resultado
 
-Cada linha compara a mediana de três execuções com a da mudança anterior; o `05` compara com o `03`, porque o `04` foi revertido. Mediana calculada métrica a métrica ([medianas](../diagnostico/11-medianas.txt)). CPU/memória: banco (B) e API (A) depois da mudança, em % de 1 CPU e MiB.
+Cada linha compara a mediana de três execuções com a da mudança anterior; o `05` compara com o `03`, porque o `04` foi revertido. Medianas por métrica: [medianas](../diagnostico/11-medianas.txt). CPU/memória: banco (B) e API (A) depois da mudança, em % de 1 CPU e MiB.
 
 | Mudança | Hipótese | p95 antes → depois (ms) | req/s antes → depois | CPU/memória | Pastas de resultados | Conclusão |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -79,7 +79,7 @@ Cada linha compara a mediana de três execuções com a da mudança anterior; o 
 
 ![Dois painéis em escala linear, da linha de base ao experimento 13: vazão em req/s subindo de 2,60 para 1.107,79 (12) e 543,27 (13, configuração recomendada), e CPU por requisição caindo de 404,23 ms para 1,16 ms (12) e 1,39 ms (13)](img/evolucao-desempenho.png)
 
-A CPU do banco fica perto do limite em quase todas as linhas por causa da carga fechada [15]: cada melhoria vira mais requisições. O custo aparece na CPU por requisição, que caiu de 404,23 ms na linha de base para 1,16 ms no 12 e 1,39 ms no 13. Os contadores do cgroup mostram o banco pausado por esgotar a cota em 92,2% dos períodos de 100 ms no 10b ([throttling](../diagnostico/10-throttling-cpu-banco.txt)), o que explica rotas com mediana de 8,7 ms e p95 de 93,4 ms. Com o índice do 12, a fração caiu para 6,7%.
+A CPU do banco fica perto do limite em quase todas as linhas por causa da carga fechada [15]: cada melhoria vira mais requisições. O custo aparece na CPU por requisição, que caiu de 404,23 ms na linha de base para 1,16 ms no 12 e 1,39 ms no 13. Os contadores do cgroup mostram o banco pausado por esgotar a cota em 92,2% dos períodos de 100 ms no 10b ([throttling](../diagnostico/10-throttling-cpu-banco.txt)), o que explica rotas com mediana de 8,7 ms e p95 de 93,4 ms. No 12, caiu para 6,7%.
 
 O mesmo código mediu 292,39 req/s em 15/11 e 379,09 req/s em 17/11, por isso comparei 12 e 13 com o 10b, do mesmo dia. O 13 confirmou a hipótese só em parte: atendeu o critério que defini antes (acima do 10b, p95 abaixo de 200 ms, sem erros), mas a CPU do banco por requisição subiu de 0,72 para 0,91 ms.
 
@@ -118,4 +118,4 @@ O que derrubaria a conclusão: se, com escrita concorrente, o `REFRESH` bloquear
 
 ## 9. Uso de IA
 
-Usei um guia gerado no Antigravity para organizar o início e o Claude Code (Anthropic) para executar comandos, auditar o repositório e revisar e reescrever a redação deste artigo. Recalculei as medianas com `diagnostico/medianas.py` a partir de `resultados/` e abri cada referência; o guia trazia um título errado para Leach [1], que corrigi. As decisões de manter ou descartar cada mudança foram minhas.
+Usei o Antigravity IDE desde o começo para montar, a partir do PDF e do repositório, um guia passo a passo, executar comandos e me explicar cada alteração, e o Claude Code (Anthropic) para auditar o repositório e revisar e corrigir o artigo. Verifiquei recalculando as medianas a partir de `resultados/` e abrindo cada referência, o que corrigiu o título de Leach [1]. As decisões foram minhas.
