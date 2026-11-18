@@ -47,7 +47,6 @@ Como ler a tabela:
 
 ```bash
 python3 diagnostico/medianas.py > diagnostico/11-medianas.txt   # medianas e CPU por requisição a partir de resultados/
-python3 artigo/img/grafico.py                                    # gráfico do artigo (precisa de matplotlib; instruções no arquivo)
 ```
 
 ## Prazo e entrega
